@@ -1,0 +1,151 @@
+---
+title: "LC-MS/MS Raw Spectral Data Processing"
+author: "Debojyoti"
+date: "2025-02-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MetaboAnalystR)
+library(OptiLCMS)
+library(tidyr)
+library(dplyr)
+library(comprehenr)
+
+```
+
+```{r}
+download.file("https://api2.xialab.ca/api/download/metaboanalyst/malaria_raw.zip",
+    destfile = "malaria_raw.zip",
+    method = "wget")
+unzip("malaria_raw.zip", exdir = "upload")
+```
+
+
+```{r}
+# Here, we extract ROIs from 3 QC samples.
+DataFiles <- list.files("upload/malaria_LCMS/", pattern = "QC_\\d{3}.mzML", full.names = TRUE)
+
+# Region of Interest (ROI) extraction
+mSet <- MetaboAnalystR::PerformROIExtraction(datapath = DataFiles, rt.idx = 0.9, rmConts = TRUE)
+```
+
+
+# Auto-optimization of parameters
+
+# Here we use PerformParamsOptimization to optimize parameters based on 
+# the extracted ROI (stored in 'mSet') before process the entire dataset
+```{r}
+
+best_params <- MetaboAnalystR::PerformParamsOptimization(mSet, param = SetPeakParam(platform = "UPLC-Q/E"), ncore = 4)
+
+
+get_group <- function(s){
+    part1 <- strsplit(s,"/")[[1]][3]
+    part2 <- strsplit(part1,"_")[[1]][1]
+    return(part2)
+}
+
+sample_name <- list.files("upload/malaria_LCMS", full.names = TRUE, pattern = "mzML")
+meta_data <- data.frame(sample_name=sample_name) %>%
+    dplyr::mutate(group_name = sapply(sample_name, get_group))
+
+meta_data_to_use <- meta_data %>% 
+    dplyr::mutate(sample_name = sub(".mzML", "", basename(sample_name)))
+
+# "path" is used to specify the path to the folder containing the raw MS spectra to be processed.
+# BPI and TIC plotting can be enabled with parameter, 
+# "plotSettings = SetPlotParam(Plot = T)", or disabled by changing "T" into "F";
+
+mSet <- OptiLCMS::ImportRawMSData(
+    path = meta_data$sample_name,
+    metadata = meta_data_to_use, 
+    plotSettings = SetPlotParam(Plot = T)
+    )
+```
+
+
+# Raw spectral data processing
+# "mSet" include complete raw MS spectra to be processed.
+# "params" is using the "best_params" generated above
+# Plotting functions can be enabled with parameter, 
+# "plotSettings = SetPlotParam(Plot = T)", or disabled by changing "T" into "F";
+```{r}
+mSet <- MetaboAnalystR::PerformPeakProfiling(
+    mSet, 
+    Params = best_params, 
+    plotSettings = SetPlotParam(Plot=TRUE)
+    )
+```
+
+
+# Feature annotation
+# We firstly define the parameters for feature annotation
+
+# 'polarity' is required, can be either 'negative' or 'positive';
+# 'perc_fwhm' is used to set the percentage of the width of the FWHM for peak grouping. 
+#              Default is set to 0.6;
+# 'mz_abs_iso' is used to set the allowed variance for the search (for isotope annotation). 
+#              The default is set to 0.005;
+# 'max_charge' is set the maximum number of the isotope charge. 
+#              For example, the default is 2, therefore the max isotope charge is 2+/-;
+# 'max_iso' is used to set the maximum number of isotope peaks.
+#              For example, the default is 2, therefore the max number of isotopes per peaks is 2;
+# 'corr_eic_th' is used to set the threshold for intensity correlations across samples. 
+#              Default is set to 0.85.
+# 'mz_abs_add' is used to set the allowed variance for the search (for adduct annotation). 
+#              Default is set to 0.001.
+# 'adducts' is used to specify the adducts based on your instrument settings.
+```{r}
+annParams <-OptiLCMS::SetAnnotationParam(polarity = 'positive', mz_abs_add = 0.015);
+
+# "mSet" include processed raw MS spectra to be processed.
+# "annParams" is the parameters used for annotation
+
+mSet <- OptiLCMS::PerformPeakAnnotation(mSet, annParams)
+
+```
+
+
+# Feature table generation
+
+# Here we format and filter the peak list for following analysis with MetaboAnalystR
+
+# Parameters are explained as below,
+# annParams, is the object created using the SetAnnotationParam function above;
+# filtIso, is used to decide to filter out all isotopes (TRUE) or not (FALSE);
+# filtAdducts, is used to decide to filter out all adducts (TRUE) or not (FALSE);
+# missPercent, specify the threshold to remove features missing in a certain percentage
+#              of all samples in a group.
+```{r}
+mSet <- OptiLCMS::FormatPeakList(
+    mSet, 
+    annParams, 
+    filtIso = FALSE, 
+    filtAdducts = FALSE, 
+    missPercent = 1)
+```
+
+Export annotation results, the annotation will be save as "annotated_peaklist.csv"
+```{r}
+OptiLCMS::Export.Annotation(mSet)
+```
+
+Export complete feature table. It will be saved as "metaboanalyst_input.csv"
+This table can be used for statistic analysis, functional analysis, biomarker analysis module directly.
+
+```{r}
+OptiLCMS::Export.PeakTable(mSet)
+```
+
+Export a summary table (peak_result_summary.txt) to summarize the information of all peaks in
+different samples. The columns are sample names, groups, retention time range, m/z range of all peaks,
+number of all peaks and percentage of missing features.
+```{r}
+
+OptiLCMS::Export.PeakSummary(mSet)
+```
