@@ -1,0 +1,29 @@
+# Use your existing image as the base
+FROM biodebojyoti/metaboanalystr:v1.0.1 AS builder
+
+# Install any additional dependencies that might be needed
+RUN R -e "install.packages('ggplot2')"
+
+# Stage 2: Set up the RStudio container
+FROM rocker/rstudio:4.4.0
+
+# Install any system dependencies for RStudio or packages that aren't in the builder
+RUN apt-get update && apt-get install -y \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libglpk40 \
+    libnetcdf-dev  
+
+
+# Copy the R packages and any other dependencies from the builder stage
+COPY --from=builder /usr/local/lib/R/site-library /usr/local/lib/R/site-library
+
+# Set the working directory
+WORKDIR /home/rstudio
+
+# Expose the necessary ports for RStudio to work
+EXPOSE 8787
+
+# Start the RStudio server
+CMD ["/init"]
